@@ -1,0 +1,65 @@
+-- Data loader files
+
+local load_data = {}
+load_data.__index = load_data   -- why do we need to set __index metatable as 'self'?
+
+function load_data.create(data_dir, batch_sz)
+  -- split_fractions is e.g. {0.9, 0.05, 0.05}
+
+  local self = {}
+  setmetatable(self, load_data)  -- "metatable" enables operator overlading on table !
+  -- See : https://gist.github.com/wikibook/5881873 for help
+
+  -- Vectorized data version (upload all data to gpu at once !)
+  data1D_tr = torch.load('data1D_tr_word')  onoff_tr = torch.load('onoff_tr_word')  label_tr = torch.load('label_tr_word')  
+  data1D_te = torch.load('data1D_te_word')  onoff_te = torch.load('onoff_te_word')  label_te = torch.load('label_te_word')
+  
+  if(opt.gpuid>=0) then
+    data1D_tr = data1D_tr:float():cuda()  label_tr = label_tr:float():cuda()
+    data1D_te = data1D_te:float():cuda()  label_te = label_te:float():cuda()
+  end
+  self.data1D_tr = data1D_tr  self.onoff_tr = onoff_tr  self.label_tr = label_tr
+  self.data1D_te = data1D_te  self.onoff_te = onoff_te  self.label_te = label_te
+  -- self.data1D_val = data1D_val self.onoff_val = onoff_val self.label_val = label_val
+  
+  -- self.batches is a table of tensors
+  nTrain = label_tr:size(1)  nTest = label_te:size(1)
+  assert(onoff_tr:size(1)== label_tr:size(1))   assert(onoff_te:size(1) == label_te:size(1))
+  --assert(onoff_val:size(1) == label_val:size(1))
+  assert(onoff_tr[-1][-1] == data1D_tr:size(1))  assert(onoff_te[-1][-1] == data1D_te:size(1))
+  --assert(onoff_val[-1][-1] == data1D_val:size(1))
+
+  -- divide data to train/val and allocate rest to test
+  self.ntrain = nTrain
+  self.ntest = nTest
+  -- self.nvalid = nValid
+
+  self.split_sizes = {self.ntrain, self.ntest}
+  -- self.split_sizes = {self.ntrain, self.ntest, self.nvalid}
+  self.batch_ix = {0,0}
+  --self.batch_ix = {0,0,0}
+
+  -- create random permutation index (will be permuted again for every epoch)
+  self.randIdx = torch.randperm(self.ntrain):long() --indexing requires longtensor()
+
+  print(string.format('data load done. Number of data batches in train: %d,  test: %d', self.ntrain, self.ntest))
+  collectgarbage()
+  return self
+end
+
+
+function load_data:next_data(split_index)
+  -- split_index is integer: 1 = train, 2 = test
+  self.batch_ix[split_index]  = self.batch_ix[split_index]  + 1
+  if self.batch_ix[split_index]  > self.split_sizes[split_index] then
+    self.batch_ix[split_index] = 1
+    self.randIDx = torch.randperm(self.ntrain) -- new random permutated index
+  end
+  local ix = self.batch_ix[split_index]
+  if(split_index == 1) then return self.data1D_tr[{{self.onoff_tr[self.randIdx[ix]][1]  , self.onoff_tr[self.randIdx[ix]][2]}}], self.label_tr[self.randIdx[ix]][1]
+  elseif(split_index == 2) then return self.data1D_te[{{self.onoff_te[ix][1] , self.onoff_te[ix][2]}}], self.label_te[ix][1]  end
+
+end
+
+return load_data
+
